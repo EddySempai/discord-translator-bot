@@ -17,36 +17,25 @@ Bot de Discord desarrollado en **Node.js (ES Modules)** y **Discord.js v14** par
 
 ---
 
-## 🛠️ Instalación y Uso Local
+## 🔄 Arquitectura Dual (PC Primario + Render Respaldo)
 
-### 1. Clonar o entrar al directorio:
-```bash
-cd D:/proyects/discord-translator-bot
-```
+Este bot utiliza un sistema de **Alta Disponibilidad con Detección Activa**:
+- **Tu PC (`BOT_ROLE=primary`):** Traduce de forma **instantánea** (<0.3s) desde tu conexión residencial. Arranca solo en segundo plano al encender Windows.
+- **Render (`BOT_ROLE=fallback`):** Permanece conectado a Discord 24/7. Cuando llega un mensaje, espera 1.8 segundos:
+  - Si tu PC está encendido: Detecta que ya fue enviado por tu PC y **descarta el envío** para no duplicar mensajes.
+  - Si tu PC está apagado: Render toma el relevo automáticamente y envía la traducción con su motor multi-traductor (Google + MyMemory de respaldo).
 
-### 2. Instalar dependencias:
-```bash
-npm install
-```
+---
 
-### 3. Configurar `.env`:
-Abre el archivo `.env` y pega tu token secreto del bot:
-```env
-DISCORD_TOKEN=tu_token_aqui
-CHANNEL_ES_ID=1442996870812274801
-CHANNEL_EN_ID=1555357281309294652
-PORT=3000
-```
+## 🛠️ Instalación y Uso en tu PC
 
-### 4. Iniciar el Bot:
-- **Modo Desarrollo:**
-  ```bash
-  npm run dev
-  ```
-- **Modo Producción:**
-  ```bash
-  npm start
-  ```
+### 1. Inicio automático con Windows:
+El bot ya está configurado en tu carpeta de inicio de Windows (`Startup`). Cada vez que enciendas tu PC, se iniciará de forma totalmente invisible en segundo plano.
+
+### 2. Controles manuales:
+- **`iniciar-bot.bat`**: Si quieres abrirlo en una ventana para ver los logs en directo.
+- **`start-silent.vbs`**: Inicia el bot en segundo plano sin ninguna ventana abierta.
+- **`detener-bot.bat`**: Detiene el bot de inmediato.
 
 ---
 
