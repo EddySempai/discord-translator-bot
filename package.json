@@ -1,0 +1,28 @@
+{
+  "name": "discord-translator-bot",
+  "version": "1.0.0",
+  "description": "Bot de Discord para traducción bidireccional automática en tiempo real con Webhooks",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": [
+    "discord",
+    "discord.js",
+    "translation",
+    "webhook",
+    "real-time"
+  ],
+  "author": "Eduin Contreras",
+  "license": "MIT",
+  "dependencies": {
+    "@vitalets/google-translate-api": "^9.2.0",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
