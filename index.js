@@ -155,13 +155,13 @@ async function getOrCreateWebhook(channel) {
 }
 
 /**
- * Traduce con sistema multi-motor robusto y a prueba de bloqueos:
- * 1. Google Translate GTX (Endpoint de Chrome, ilimitado, rápido y sin bloqueo de Datacenter).
- * 2. @vitalets/google-translate-api (Motor secundario).
- * 3. MyMemory API (Con filtro estricto anti-warnings).
+ * Traduce utilizando endpoints oficiales de Google Chrome (100% gratuitos e ilimitados):
+ * 1. Google Translate GTX (translate.googleapis.com)
+ * 2. Google Translate Chrome Client (clients5.google.com)
+ * 3. @vitalets/google-translate-api (Librería alternativa)
  */
 async function translateText(text, to) {
-  // Motor 1: Google Translate GTX (El más rápido y sin límites de cuota)
+  // Motor 1: Google Translate GTX (Ultra-rápido, sin límites de cuota, oficial de Chrome)
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 4000);
@@ -176,41 +176,36 @@ async function translateText(text, to) {
       }
     }
   } catch (err) {
-    console.warn(`⚠️ [TRADUCTOR] Motor 1 (Google GTX) falló (${err.message}). Probando Motor 2...`);
+    console.warn(`⚠️ [TRADUCTOR] Motor 1 (GTX) falló (${err.message}). Probando Motor 2...`);
   }
 
-  // Motor 2: @vitalets/google-translate-api
+  // Motor 2: Google Chrome Client 5 (Ultra-rápido, redundante oficial)
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3500);
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    const url = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=${to}&q=${encodeURIComponent(text)}`;
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data[0]?.[0]) {
+        const result = Array.isArray(data[0]) ? data.map((item) => item[0]).join(' ') : data[0];
+        if (result && result.trim()) return result.trim();
+      }
+    }
+  } catch (err) {
+    console.warn(`⚠️ [TRADUCTOR] Motor 2 (Clients5) falló (${err.message}). Probando Motor 3...`);
+  }
+
+  // Motor 3: @vitalets/google-translate-api
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
     const result = await translate(text, { to, fetchOptions: { signal: controller.signal } });
     clearTimeout(timeout);
     if (result?.text && result.text.trim()) return result.text.trim();
   } catch (err) {
-    console.warn(`⚠️ [TRADUCTOR] Motor 2 falló (${err.message}). Probando Motor 3...`);
-  }
-
-  // Motor 3: MyMemory API con FILTRO ESTRICTO anti-avisos
-  try {
-    const from = to === 'en' ? 'es' : 'en';
-    const response = await fetch(
-      `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${from}|${to}`
-    );
-    if (response.ok) {
-      const data = await response.json();
-      const candidate = data?.responseData?.translatedText;
-      // FILTRO CRÍTICO: Si MyMemory devuelve un aviso de límite de uso, RECHAZARLO
-      if (
-        data?.responseStatus === 200 &&
-        candidate &&
-        !candidate.toUpperCase().includes('MYMEMORY WARNING') &&
-        !candidate.toUpperCase().includes('USAGE LIMIT')
-      ) {
-        return candidate.trim();
-      }
-    }
-  } catch (secErr) {
-    console.error('❌ [ERROR] Falló Motor 3:', secErr.message);
+    console.error(`❌ [TRADUCTOR] Motor 3 falló (${err.message}).`);
   }
 
   throw new Error('Todos los motores de traducción fallaron.');
