@@ -234,7 +234,13 @@ client.on(Events.MessageCreate, async (message) => {
     if (message.author.bot) return;
     if (message.webhookId) return;
     if (message.system) return;
-    if (!message.content || message.content.trim() === '') return;
+
+    const rawContent = message.content ? message.content.trim() : '';
+    const hasAttachments = message.attachments.size > 0;
+    const hasStickers = message.stickers.size > 0;
+
+    // Si no hay texto, ni archivos adjuntos, ni stickers, omitir
+    if (!rawContent && !hasAttachments && !hasStickers) return;
 
     const config = TRANSLATION_MAP[message.channelId];
     if (!config) return;
@@ -253,14 +259,14 @@ client.on(Events.MessageCreate, async (message) => {
       // Leer los últimos 6 mensajes del canal destino
       const recentMessages = await targetChannel.messages.fetch({ limit: 6 });
       const alreadyProcessed = recentMessages.some((msg) => {
-        const isRecent = (Date.now() - msg.createdTimestamp) < 15000; // últimos 15 seg
+        const isRecent = (Date.now() - msg.createdTimestamp) < 15000;
         const isWebhook = Boolean(msg.webhookId);
         const isSameUser = msg.author.username === sanitizedUsername;
         return isRecent && isWebhook && isSameUser;
       });
 
       if (alreadyProcessed) {
-        console.log(`🛡️ [RESPALDO] Mensaje de "${sanitizedUsername}" ya fue traducido por tu PC. Omitiendo.`);
+        console.log(`🛡️ [RESPALDO] Mensaje de "${sanitizedUsername}" ya fue atendido por tu PC. Omitiendo.`);
         return;
       }
 
@@ -271,11 +277,58 @@ client.on(Events.MessageCreate, async (message) => {
     const targetChannel = await client.channels.fetch(config.targetChannelId);
     if (!targetChannel || targetChannel.type !== ChannelType.GuildText) return;
 
-    // 4. Traducir
-    const translatedText = await translateText(message.content, config.targetLang);
-    if (!translatedText || translatedText.trim() === '') return;
+    // 4. Procesar y recolectar archivos multimedia (Imágenes, vídeos, stickers)
+    const files = [];
 
-    // 5. Enviar por Webhook
+    // Adjuntos regulares (imágenes, audios, vídeos, documentos)
+    if (hasAttachments) {
+      for (const att of message.attachments.values()) {
+        files.push({
+          attachment: att.url,
+          name: att.name
+        });
+      }
+    }
+
+    // Stickers (Discord no permite enviar stickers nativos por webhook, pero reenviamos la imagen del sticker)
+    if (hasStickers) {
+      for (const sticker of message.stickers.values()) {
+        files.push({
+          attachment: sticker.url,
+          name: `${sticker.name.replace(/[^a-zA-Z0-9_-]/g, '_') || 'sticker'}.png`
+        });
+      }
+    }
+
+    // 5. Procesar y traducir texto (protegiendo URLs y enlaces de GIFs para que no se rompan)
+    let finalText = '';
+
+    if (rawContent) {
+      // Extraer URLs (Tenor, Giphy, links) para evitar que Google Translate modifique los enlaces
+      const urls = [];
+      const tokenized = rawContent.replace(/https?:\/\/[^\s]+/g, (match) => {
+        urls.push(match);
+        return `[[URL_${urls.length - 1}]]`;
+      });
+
+      // Si el mensaje es únicamente un enlace (ej. GIF directo de Tenor), no hace falta traducir
+      const textWithoutUrls = tokenized.replace(/\[\[URL_\d+\]\]/g, '').trim();
+
+      if (textWithoutUrls === '') {
+        finalText = rawContent;
+      } else {
+        try {
+          const translated = await translateText(tokenized, config.targetLang);
+          // Restaurar URLs originales intactas
+          finalText = translated.replace(/\[\[URL_(\d+)\]\]/gi, (_, idx) => urls[Number(idx)] || '');
+        } catch (err) {
+          console.warn(`⚠️ [TRADUCCIÓN] No se pudo traducir, enviando texto original:`, err.message);
+          finalText = rawContent;
+        }
+      }
+    }
+
+    // 6. Enviar por Webhook replicando la identidad
     let webhook = await getOrCreateWebhook(targetChannel);
     const authorAvatar = message.author.displayAvatarURL({
       extension: 'png',
@@ -283,34 +336,44 @@ client.on(Events.MessageCreate, async (message) => {
       size: 256
     });
 
-    const chunks = splitMessage(translatedText, DISCORD_MSG_LIMIT);
+    const chunks = finalText ? splitMessage(finalText, DISCORD_MSG_LIMIT) : [''];
 
-    for (const chunk of chunks) {
-      try {
-        await webhook.send({
-          content: chunk,
-          username: sanitizedUsername,
-          avatarURL: authorAvatar,
-          allowedMentions: { parse: [] }
-        });
-      } catch (sendErr) {
-        if (sendErr.code === 10015) {
-          webhookCache.delete(targetChannel.id);
-          webhook = await getOrCreateWebhook(targetChannel);
-          await webhook.send({
-            content: chunk,
-            username: sanitizedUsername,
-            avatarURL: authorAvatar,
-            allowedMentions: { parse: [] }
-          });
-        } else {
-          throw sendErr;
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const payload = {
+        username: sanitizedUsername,
+        avatarURL: authorAvatar,
+        allowedMentions: { parse: [] }
+      };
+
+      if (chunk && chunk.trim() !== '') {
+        payload.content = chunk;
+      }
+
+      // Los archivos adjuntos se incluyen en el primer bloque del mensaje
+      if (i === 0 && files.length > 0) {
+        payload.files = files;
+      }
+
+      // Solo enviar si hay contenido o archivos
+      if (payload.content || payload.files) {
+        try {
+          await webhook.send(payload);
+        } catch (sendErr) {
+          if (sendErr.code === 10015) {
+            webhookCache.delete(targetChannel.id);
+            webhook = await getOrCreateWebhook(targetChannel);
+            await webhook.send(payload);
+          } else {
+            throw sendErr;
+          }
         }
       }
     }
 
     const tag = isFallback ? '[RENDER RESPALDO]' : '[PC PRIMARIO]';
-    console.log(`${tag} ${config.label} | ${authorName}: "${message.content.slice(0, 30)}..." ➡️ "${translatedText.slice(0, 30)}..."`);
+    const logPreview = finalText ? `"${finalText.slice(0, 30)}..."` : `[${files.length} archivo(s)]`;
+    console.log(`${tag} ${config.label} | ${authorName}: ${logPreview}`);
 
   } catch (error) {
     console.error('❌ [ERROR]', error.message);
