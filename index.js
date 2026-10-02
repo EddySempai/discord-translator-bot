@@ -155,32 +155,62 @@ async function getOrCreateWebhook(channel) {
 }
 
 /**
- * Traduce con carrera/fallback: Intenta Google primero; si se traba o bloquea en la nube, usa MyMemory
+ * Traduce con sistema multi-motor robusto y a prueba de bloqueos:
+ * 1. Google Translate GTX (Endpoint de Chrome, ilimitado, rápido y sin bloqueo de Datacenter).
+ * 2. @vitalets/google-translate-api (Motor secundario).
+ * 3. MyMemory API (Con filtro estricto anti-warnings).
  */
 async function translateText(text, to) {
-  // Motor 1: Google Translate
+  // Motor 1: Google Translate GTX (El más rápido y sin límites de cuota)
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${to}&dt=t&q=${encodeURIComponent(text)}`;
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data?.[0])) {
+        const result = data[0].map((item) => item[0]).join('');
+        if (result && result.trim()) return result.trim();
+      }
+    }
+  } catch (err) {
+    console.warn(`⚠️ [TRADUCTOR] Motor 1 (Google GTX) falló (${err.message}). Probando Motor 2...`);
+  }
+
+  // Motor 2: @vitalets/google-translate-api
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3500);
     const result = await translate(text, { to, fetchOptions: { signal: controller.signal } });
     clearTimeout(timeout);
-    if (result?.text) return result.text;
+    if (result?.text && result.text.trim()) return result.text.trim();
   } catch (err) {
-    console.warn(`⚠️ [TRADUCTOR] Motor primario lento/bloqueado (${err.message}). Conectando motor secundario...`);
+    console.warn(`⚠️ [TRADUCTOR] Motor 2 falló (${err.message}). Probando Motor 3...`);
   }
 
-  // Motor 2 (Respaldo): MyMemory API
+  // Motor 3: MyMemory API con FILTRO ESTRICTO anti-avisos
   try {
     const from = to === 'en' ? 'es' : 'en';
     const response = await fetch(
       `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${from}|${to}`
     );
-    const data = await response.json();
-    if (data?.responseData?.translatedText) {
-      return data.responseData.translatedText;
+    if (response.ok) {
+      const data = await response.json();
+      const candidate = data?.responseData?.translatedText;
+      // FILTRO CRÍTICO: Si MyMemory devuelve un aviso de límite de uso, RECHAZARLO
+      if (
+        data?.responseStatus === 200 &&
+        candidate &&
+        !candidate.toUpperCase().includes('MYMEMORY WARNING') &&
+        !candidate.toUpperCase().includes('USAGE LIMIT')
+      ) {
+        return candidate.trim();
+      }
     }
   } catch (secErr) {
-    console.error('❌ [ERROR] Falló motor secundario:', secErr.message);
+    console.error('❌ [ERROR] Falló Motor 3:', secErr.message);
   }
 
   throw new Error('Todos los motores de traducción fallaron.');
